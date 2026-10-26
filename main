@@ -1,1 +1,509 @@
+from datetime import datetime
+import json
+import os
+import threading
+import urllib.request
+from kivy.app import App
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.graphics import Color, RoundedRectangle
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.popup import Popup
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.textinput import TextInput
+
+Window.clearcolor = (0.08, 0.09, 0.11, 1)
+USD_TO_EUR = 0.92
+DEFAULT_USD_TO_DZD = 134.33
+DATA_FILE = "gold_prices.json"
+
+
+class ModernButton(Button):
+
+  def __init__(self, bg_color=(0.2, 0.6, 0.8, 1), radius=12, **kwargs):
+    super(ModernButton, self).__init__(**kwargs)
+    self.background_color = (0, 0, 0, 0)
+    self.bg_color = bg_color
+    self.radius = radius
+    self.bind(pos=self.update_canvas, size=self.update_canvas)
+
+  def update_canvas(self, *args):
+    self.canvas.before.clear()
+    with self.canvas.before:
+      Color(*self.bg_color)
+      RoundedRectangle(
+          pos=self.pos, size=self.size, radius=[(self.radius, self.radius)]
+      )
+
+
+class GoldTrackerApp(App):
+
+  def build(self):
+    self.title = "Gold Price Tracker (24K, 21K, 18K)"
+    root = BoxLayout(orientation="vertical", padding=14, spacing=10)
+
+    # Header Title
+    header = Label(
+        text="[b]GOLD PRICE TRACKER (USD, EUR, DZD)[/b]",
+        font_size="15sp",
+        color=(0.95, 0.61, 0.07, 1),
+        size_hint=(1, 0.08),
+        markup=True,
+    )
+    root.add_widget(header)
+
+    # Main Scroll Window
+    self.scroll = ScrollView(size_hint=(1, 0.60))
+    self.info_label = Label(
+        text=(
+            "[color=aaaaaa]Tap 'Refresh & Save Today's Price' to fetch live"
+            " data & exchange rates \nor 'Search by Date' to check historical"
+            " records.[/color]"
+        ),
+        font_size="13sp",
+        color=(1, 1, 1, 1),
+        size_hint_y=None,
+        halign="center",
+        valign="middle",
+        markup=True,
+    )
+
+    self.info_label.bind(
+        width=lambda *x: setattr(
+            self.info_label, "text_size", (self.scroll.width - 30, None)
+        )
+    )
+    self.info_label.bind(
+        texture_size=lambda instance, value: setattr(
+            instance, "height", max(value[1] + 30, self.scroll.height)
+        )
+    )
+
+    self.scroll.add_widget(self.info_label)
+    root.add_widget(self.scroll)
+
+    # Status Bar
+    self.status_label = Label(
+        text="Status: Ready",
+        font_size="12sp",
+        color=(0.36, 0.68, 0.89, 1),
+        size_hint=(1, 0.04),
+    )
+    root.add_widget(self.status_label)
+
+    # Styled Action Buttons
+    self.refresh_btn = ModernButton(
+        text="Refresh & Save Today's Price",
+        font_size="14sp",
+        bold=True,
+        bg_color=(0.83, 0.67, 0.05, 1),
+        color=(1, 1, 1, 1),
+        size_hint=(1, 0.08),
+    )
+    self.refresh_btn.bind(on_press=self.start_fetch_thread)
+    root.add_widget(self.refresh_btn)
+
+    self.search_btn = ModernButton(
+        text="Search by Date",
+        font_size="14sp",
+        bold=True,
+        bg_color=(0.16, 0.50, 0.73, 1),
+        color=(1, 1, 1, 1),
+        size_hint=(1, 0.08),
+    )
+    self.search_btn.bind(on_press=self.show_search_popup)
+    root.add_widget(self.search_btn)
+
+    self.exit_btn = ModernButton(
+        text="Exit App",
+        font_size="14sp",
+        bold=True,
+        bg_color=(0.75, 0.22, 0.22, 1),
+        color=(1, 1, 1, 1),
+        size_hint=(1, 0.08),
+    )
+    self.exit_btn.bind(on_press=self.show_exit_confirmation)
+    root.add_widget(self.exit_btn)
+
+    return root
+
+  def get_live_dzd_rate(self):
+    try:
+      url = "https://open.er-api.com/v6/latest/USD"
+      req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+      with urllib.request.urlopen(req, timeout=5) as response:
+        data = json.loads(response.read().decode())
+        rates = data.get("rates", {})
+        dzd_rate = rates.get("DZD")
+        if dzd_rate:
+          return float(dzd_rate)
+    except Exception:
+      pass
+    return DEFAULT_USD_TO_DZD
+
+  def show_search_popup(self, instance):
+    content = BoxLayout(orientation="vertical", padding=14, spacing=10)
+    content.add_widget(
+        Label(
+            text="Enter Date (YYYY/MM/DD):",
+            font_size="13sp",
+            color=(0.8, 0.8, 0.8, 1),
+            size_hint=(1, 0.3),
+        )
+    )
+    self.date_input = TextInput(
+        text=datetime.now().strftime("%Y/%m/%d"),
+        font_size="16sp",
+        multiline=False,
+        halign="center",
+        size_hint=(1, 0.35),
+    )
+    content.add_widget(self.date_input)
+
+    btn_layout = BoxLayout(
+        orientation="horizontal", spacing=10, size_hint=(1, 0.35)
+    )
+    search_action_btn = ModernButton(
+        text="Search", bg_color=(0.16, 0.50, 0.73, 1), font_size="13sp", bold=True
+    )
+    cancel_btn = ModernButton(
+        text="Cancel", bg_color=(0.3, 0.3, 0.3, 1), font_size="13sp", bold=True
+    )
+
+    self.search_popup = Popup(
+        title="Search Gold Price by Date",
+        content=content,
+        size_hint=(0.85, 0.28),
+        auto_dismiss=True,
+    )
+    search_action_btn.bind(on_press=self.fetch_historical_data)
+    cancel_btn.bind(on_press=self.search_popup.dismiss)
+    btn_layout.add_widget(search_action_btn)
+    btn_layout.add_widget(cancel_btn)
+    content.add_widget(btn_layout)
+    self.search_popup.open()
+
+  def fetch_historical_data(self, instance):
+    target_date = self.date_input.text.strip()
+    self.search_popup.dismiss()
+    self.status_label.text = f"Searching records for {target_date}..."
+    self.refresh_btn.disabled = True
+    threading.Thread(
+        target=self.process_historical_search, args=(target_date,), daemon=True
+    ).start()
+
+  def process_historical_search(self, target_date):
+    try:
+      user_date_obj = datetime.strptime(target_date, "%Y/%m/%d").date()
+    except ValueError:
+      try:
+        user_date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+      except ValueError:
+        Clock.schedule_once(
+            lambda dt: self.update_ui(
+                "Invalid date format. Please use YYYY/MM/DD.", "Error"
+            ),
+            0,
+        )
+        return
+
+    if not os.path.exists(DATA_FILE):
+      Clock.schedule_once(
+          lambda dt: self.update_ui(
+              f"File '{DATA_FILE}' not found. Please refresh live prices"
+              " first.",
+              "Error",
+          ),
+          0,
+      )
+      return
+
+    try:
+      with open(DATA_FILE, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+      exact_match = None
+      parsed_records = []
+
+      for record in records:
+        d_str = record.get("date")
+        if not d_str:
+          continue
+
+        try:
+          rec_date_obj = datetime.strptime(str(d_str).strip(), "%Y/%m/%d").date()
+        except ValueError:
+          continue
+
+        if rec_date_obj == user_date_obj:
+          exact_match = record
+          break
+        parsed_records.append((rec_date_obj, record))
+
+      if exact_match:
+        price_usd = float(exact_match.get("price_usd", 0))
+        price_eur = float(exact_match.get("price_eur", price_usd * USD_TO_EUR))
+        price_dzd = float(exact_match.get("price_dzd", 0))
+
+        # جلب أسعار DZD
+        g24_dzd = float(exact_match.get("gram_24_dzd", 0))
+        g21_dzd = float(exact_match.get("gram_21_dzd", 0))
+        g18_dzd = float(exact_match.get("gram_18_dzd", 0))
+
+        # جلب أسعار EUR
+        g24_eur = float(exact_match.get("gram_24_eur", 0))
+        g21_eur = float(exact_match.get("gram_21_eur", 0))
+        g18_eur = float(exact_match.get("gram_18_eur", 0))
+
+        # جلب أسعار USD
+        g24_usd = float(exact_match.get("gram_24_usd", 0))
+        g21_usd = float(exact_match.get("gram_21_usd", 0))
+        g18_usd = float(exact_match.get("gram_18_usd", 0))
+
+        text_output = (
+            f"[color=00ffff][b]Target Date: {exact_match.get('date')}[/b][/color]\n"
+            f"Status: [color=00ff00]Exact Match Found[/color]\n\n"
+            f"[b]--- Gram Prices (DZD) ---[/b]\n"
+            f"• 24K: {g24_dzd:,.2f} DZD\n"
+            f"• 21K: [color=ffd700]{g21_dzd:,.2f} DZD[/color]\n"
+            f"• 18K: [color=ffaa00]{g18_dzd:,.2f} DZD[/color]\n\n"
+            f"[b]--- Gram Prices (EUR) ---[/b]\n"
+            f"• 24K: €{g24_eur:.2f}\n"
+            f"• 21K: [color=00ff00]€{g21_eur:.2f}[/color]\n"
+            f"• 18K: [color=00ff00]€{g18_eur:.2f}[/color]\n\n"
+            f"[b]--- Gram Prices (USD) ---[/b]\n"
+            f"• 24K: ${g24_usd:.2f} | 21K: ${g21_usd:.2f} | 18K:"
+            f" ${g18_usd:.2f}\n\n"
+            f"[b]--- Ounce Prices ---[/b]\n"
+            f"• USD: ${price_usd:,.2f} | EUR: €{price_eur:,.2f} | DZD:"
+            f" {price_dzd:,.2f}"
+        )
+        Clock.schedule_once(
+            lambda dt: self.update_ui(
+                text_output, f"Loaded data for: {target_date}"
+            ),
+            0,
+        )
+      else:
+        previous_records = [
+            (r_date, r) for r_date, r in parsed_records if r_date < user_date_obj
+        ]
+        if previous_records:
+          closest_date, closest_record = max(
+              previous_records, key=lambda x: x[0]
+          )
+          rec_date_formatted = closest_record.get("date")
+
+          g21_dzd = float(closest_record.get("gram_21_dzd", 0))
+          g18_dzd = float(closest_record.get("gram_18_dzd", 0))
+          g24_dzd = float(closest_record.get("gram_24_dzd", 0))
+
+          g21_eur = float(closest_record.get("gram_21_eur", 0))
+          g18_eur = float(closest_record.get("gram_18_eur", 0))
+          g24_eur = float(closest_record.get("gram_24_eur", 0))
+
+          text_output = (
+              f"[color=ffa500]Target Date: {target_date} (Not Found)[/color]\n"
+              f"Closest Date: [color=00ffff]{rec_date_formatted}[/color]\n\n"
+              f"[b]--- Gram Prices (DZD) ---[/b]\n"
+              f"• 24K: {g24_dzd:,.2f} DZD\n"
+              f"• 21K: [color=ffd700]{g21_dzd:,.2f} DZD[/color]\n"
+              f"• 18K: [color=ffaa00]{g18_dzd:,.2f} DZD[/color]\n\n"
+              f"[b]--- Gram Prices (EUR) ---[/b]\n"
+              f"• 24K: €{g24_eur:.2f}\n"
+              f"• 21K: [color=00ff00]€{g21_eur:.2f}[/color]\n"
+              f"• 18K: [color=00ff00]€{g18_eur:.2f}[/color]"
+          )
+          Clock.schedule_once(
+              lambda dt: self.update_ui(
+                  text_output, f"Loaded closest date: {rec_date_formatted}"
+              ),
+              0,
+          )
+        else:
+          Clock.schedule_once(
+              lambda dt: self.update_ui(
+                  "No record found for this date or earlier.", "Not Found"
+              ),
+              0,
+          )
+
+    except Exception as e:
+      Clock.schedule_once(
+          lambda dt: self.update_ui(f"Error reading JSON: {e}", "Error"), 0
+      )
+
+  def show_exit_confirmation(self, instance):
+    content = BoxLayout(orientation="vertical", padding=12, spacing=10)
+    content.add_widget(
+        Label(
+            text="Are you sure you want to exit?",
+            font_size="13sp",
+            color=(1, 1, 1, 1),
+            size_hint=(1, 0.4),
+        )
+    )
+    btn_layout = BoxLayout(
+        orientation="horizontal", spacing=10, size_hint=(1, 0.6)
+    )
+    yes_btn = ModernButton(
+        text="Yes", bg_color=(0.75, 0.22, 0.22, 1), font_size="13sp", bold=True
+    )
+    no_btn = ModernButton(
+        text="Cancel", bg_color=(0.3, 0.3, 0.3, 1), font_size="13sp", bold=True
+    )
+    popup = Popup(
+        title="Confirm Exit",
+        content=content,
+        size_hint=(0.85, 0.22),
+        auto_dismiss=True,
+    )
+    yes_btn.bind(on_press=lambda x: App.get_running_app().stop())
+    no_btn.bind(on_press=popup.dismiss)
+    btn_layout.add_widget(yes_btn)
+    btn_layout.add_widget(no_btn)
+    content.add_widget(btn_layout)
+    popup.open()
+
+  def start_fetch_thread(self, instance):
+    self.status_label.text = "Fetching live gold & currency rates..."
+    self.refresh_btn.disabled = True
+    threading.Thread(target=self.fetch_and_save_gold_data, daemon=True).start()
+
+  def fetch_and_save_gold_data(self):
+    url_current = "https://api.gold-api.com/price/XAU"
+    try:
+      usd_to_dzd = self.get_live_dzd_rate()
+
+      req = urllib.request.Request(
+          url_current, headers={"User-Agent": "Mozilla/5.0"}
+      )
+      with urllib.request.urlopen(req, timeout=10) as response:
+        data = json.loads(response.read().decode())
+        oz_price_usd = data.get("price", 0)
+        updated_at_str = data.get("updatedAt", datetime.now().isoformat())
+
+        if oz_price_usd > 0:
+          current_date_str = updated_at_str.split("T")[0].replace("-", "/")
+
+          oz_price_eur = oz_price_usd * USD_TO_EUR
+          oz_price_dzd = oz_price_usd * usd_to_dzd
+
+          gram_24_usd = oz_price_usd / 31.1035
+          gram_24_eur = oz_price_eur / 31.1035
+          gram_24_dzd = oz_price_dzd / 31.1035
+
+          gram_21_usd = gram_24_usd * (21 / 24)
+          gram_21_eur = gram_24_eur * (21 / 24)
+          gram_21_dzd = gram_24_dzd * (21 / 24)
+
+          gram_18_usd = gram_24_usd * (18 / 24)
+          gram_18_eur = gram_24_eur * (18 / 24)
+          gram_18_dzd = gram_24_dzd * (18 / 24)
+
+          complete_data_record = {
+              "date": current_date_str,
+              "price_usd": oz_price_usd,
+              "price_eur": oz_price_eur,
+              "price_dzd": oz_price_dzd,
+              "usd_to_dzd_rate": usd_to_dzd,
+              "gram_24_usd": gram_24_usd,
+              "gram_21_usd": gram_21_usd,
+              "gram_18_usd": gram_18_usd,
+              "gram_24_eur": gram_24_eur,
+              "gram_21_eur": gram_21_eur,
+              "gram_18_eur": gram_18_eur,
+              "gram_24_dzd": gram_24_dzd,
+              "gram_21_dzd": gram_21_dzd,
+              "gram_18_dzd": gram_18_dzd,
+          }
+
+          self.save_full_record_to_json(complete_data_record)
+          history_records = self.load_json_history()
+
+          text_output = (
+              f"[color=ffa500]Today's Date: {current_date_str}[/color]\n"
+              f"[color=00ffff]USD/DZD Rate: {usd_to_dzd:.2f}[/color]\n\n"
+              f"[b]--- 21K Gram Prices ---[/b]\n"
+              f"• DZD: [color=ffd700]{gram_21_dzd:,.2f} DZD[/color]\n"
+              f"• EUR: [color=00ff00]€{gram_21_eur:.2f}[/color]\n"
+              f"• USD: [color=00ff00]${gram_21_usd:.2f}[/color]\n\n"
+              f"[b]--- Other Karat Prices (DZD) ---[/b]\n"
+              f"• 24K: {gram_24_dzd:,.2f} DZD\n"
+              f"• 18K: [color=ffaa00]{gram_18_dzd:,.2f} DZD[/color]\n\n"
+              f"[b]--- Reference Ounce Prices ---[/b]\n"
+              f"[color=ffd700]• USD Ounce:[/color] ${oz_price_usd:,.2f}\n"
+              f"[color=ffd700]• EUR Ounce:[/color] €{oz_price_eur:,.2f}\n"
+              f"[color=ffd700]• DZD Ounce:[/color] {oz_price_dzd:,.2f} DZD\n\n"
+              f"[b]--- Saved History ({len(history_records)} Days) ---[/b]\n"
+          )
+
+          for record in history_records[-3:]:
+            rec_dzd = record.get("gram_21_dzd", 0)
+            rec_dzd_18 = record.get("gram_18_dzd", 0)
+            text_output += (
+                f"• {record.get('date')}: [color=00ffff]21K:"
+                f" {rec_dzd:,.2f}DZD[/color] | [color=ffaa00]18K:"
+                f" {rec_dzd_18:,.2f}DZD[/color]\n"
+            )
+
+          status_text = f"Successfully updated & saved to {DATA_FILE}"
+          Clock.schedule_once(
+              lambda dt: self.update_ui(text_output, status_text), 0
+          )
+        else:
+          Clock.schedule_once(
+              lambda dt: self.update_ui("Unable to load data", "Error"), 0
+          )
+    except Exception as e:
+      err_msg = str(e)[:40]
+      Clock.schedule_once(
+          lambda dt: self.update_ui(
+              "Connection Failed.\nCheck your internet connection.",
+              f"Error: {err_msg}",
+          ),
+          0,
+      )
+
+  def save_full_record_to_json(self, new_record):
+    records = []
+    if os.path.exists(DATA_FILE):
+      try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+          records = json.load(f)
+      except json.JSONDecodeError:
+        records = []
+
+    updated = False
+    for i, record in enumerate(records):
+      if record.get("date") == new_record["date"]:
+        records[i] = new_record
+        updated = True
+        break
+
+    if not updated:
+      records.append(new_record)
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+      json.dump(records, f, indent=4, ensure_ascii=False)
+
+  def load_json_history(self):
+    if os.path.exists(DATA_FILE):
+      try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+          return json.load(f)
+      except json.JSONDecodeError:
+        return []
+    return []
+
+  def update_ui(self, main_text, status_text):
+    self.info_label.text = main_text
+    self.status_label.text = status_text
+    self.refresh_btn.disabled = False
+
+
+if __name__ == "__main__":
+  GoldTrackerApp().run()
 
