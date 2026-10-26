@@ -247,17 +247,14 @@ class GoldTrackerApp(App):
         price_eur = float(exact_match.get("price_eur", price_usd * USD_TO_EUR))
         price_dzd = float(exact_match.get("price_dzd", 0))
 
-        # جلب أسعار DZD
         g24_dzd = float(exact_match.get("gram_24_dzd", 0))
         g21_dzd = float(exact_match.get("gram_21_dzd", 0))
         g18_dzd = float(exact_match.get("gram_18_dzd", 0))
 
-        # جلب أسعار EUR
         g24_eur = float(exact_match.get("gram_24_eur", 0))
         g21_eur = float(exact_match.get("gram_21_eur", 0))
         g18_eur = float(exact_match.get("gram_18_eur", 0))
 
-        # جلب أسعار USD
         g24_usd = float(exact_match.get("gram_24_usd", 0))
         g21_usd = float(exact_match.get("gram_21_usd", 0))
         g18_usd = float(exact_match.get("gram_18_usd", 0))
@@ -506,4 +503,3 @@ class GoldTrackerApp(App):
 
 if __name__ == "__main__":
   GoldTrackerApp().run()
-
